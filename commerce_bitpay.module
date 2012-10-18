@@ -1,0 +1,310 @@
+<?php
+
+/**
+ * @file
+ * Provides a Bitpay payment method for Drupal Commerce
+ */
+
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_bitpay_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['commerce_bitpay'] = array(
+    'title' => t('Bitcoin'),
+    'description' => t('Demonstrates complete payment during checkout and serves as a development example.'),
+    'active' => TRUE,
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+  );
+
+  return $payment_methods;
+}
+
+function commerce_bitpay_admin_settings() {
+  $form = array();
+
+  $form['commerce_bitpay_apikey'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('commerce_bitpay_apikey', ''),
+    '#title' => t('BitPay API key'),
+    '#size' => 60,
+    '#maxlength' => 255,
+    '#description' => t("BitPay API access key. Something like aW4x5kLr4mer4fovDJLGTMXSATkf81DLKcm349ajd12"),
+    '#required' => TRUE,
+  );
+  
+    $form['commerce_bitpay_secret'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('commerce_bitpay_secret', ''),
+    '#title' => t('BitPay secret key'),
+    '#size' => 60,
+    '#maxlength' => 255,
+    '#description' => t("Set the secret to a random string of characters (8 to 10 is sufficient). This secret is used to verify the authenticity of incoming bit-pay invoice notifications."),
+    '#required' => TRUE,
+  );
+  
+  $form['commerce_bitpay_currency'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('commerce_bitpay_currency', ''),
+    '#title' => t('Currency'),
+    '#size' => 60,
+    '#maxlength' => 3,
+    '#description' => t("This is the currency code set for the price setting. The pricing currencies
+currently supported are USD, EUR, BTC, and all of the codes listed on this
+page:<br> https://bitpay.com/bitcoin-exchange-rates
+"),
+    '#required' => TRUE,
+  );
+
+  $form['commerce_bitpay_redirectURL'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('commerce_bitpay_redirectURL', ''),
+    '#title' => t('Redirect url'),
+    '#size' => 60,
+    '#maxlength' => 255,
+    '#description' => t("This is the URL for a return link that is displayed on the receipt, to return the
+shopper back to your website after a successful purchase.<br><b> Leave blank to use default commerce \"checkout complete\" -page.</b>
+"),
+    '#required' => FALSE,
+  );
+  
+   $form['commerce_bitpay_notificationEmail'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('commerce_bitpay_notificationEmail', ''),
+    '#title' => t('Notification email'),
+    '#size' => 60,
+    '#maxlength' => 3,
+    '#description' => t("This is the email where invoice update notifications should be sent.
+        <br><b>Leave blank to use default settings defined in your Bitpay account.</b>
+"),
+    '#required' => FALSE,
+  );
+  
+  return system_settings_form($form);
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_bitpay_menu() {
+  $items = array();
+
+  
+  $items['admin/commerce/config/bitpay'] = array(
+    'title' => 'Bitpay',
+    'description' => 'Configure Bitpay module',  
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_bitpay_admin_settings'),
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  
+  // Define an always accessible path to receive IPNs.
+  $items['bitpay/ipn'] = array(
+    'title' => 'Bitpay ipn',
+    'page callback' => 'bpVerifyNotification',
+    'page arguments' => array(2),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+
+  );
+
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/bank-transfer-confirm'] = array(
+    'title' => 'Confirm payment',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_bitpay_confirm_form', 3, 5),
+    'access callback' => 'commerce_bitpay_transaction_confirm_access',
+    'access arguments' => array(3, 5),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 2,
+    'file' => 'includes/commerce_bitpay.admin.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Access callback function to limit use to non-completed bank transfers
+ */
+function commerce_bitpay_transaction_confirm_access($order, $transaction = NULL, $account = NULL) {
+  $access = commerce_payment_transaction_access('update', $transaction, $account);
+  if ($access && $transaction) {
+    if ($transaction->payment_method != 'commerce_bitpay') {
+      $access = FALSE;
+    }
+    else if ($transaction->status == COMMERCE_PAYMENT_STATUS_SUCCESS) {
+      $access = FALSE;
+    }
+  }
+  return $access;
+}
+
+/**
+ * Payment method callback: submit form.
+ */
+function commerce_bitpay_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+
+}
+
+/**
+ * Payment method callback: submit form validation.
+ */
+function commerce_bitpay_submit_form_validate($payment_method, $pane_form, $pane_values, $order, $form_parents = array()) {
+   
+    
+}
+
+/**
+ * Payment method callback: submit form submission.
+ */
+function commerce_bitpay_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  $order->data['commerce_bitpay'] = $pane_values;
+
+  commerce_bitpay_transaction($payment_method, $order, $charge, $pane_values['name']);
+  
+}
+
+/**
+ * Creates an example payment transaction for the specified charge amount.
+ *
+ * @param $payment_method
+ *   The payment method instance object used to charge this payment.
+ * @param $order
+ *   The order object the payment applies to.
+ * @param $charge
+ *   An array indicating the amount and currency code to charge.
+ * @param $name
+ *   The name entered on the submission form.
+ */
+function commerce_bitpay_transaction($payment_method, $order, $charge, $name) {
+  $transaction = commerce_payment_transaction_new('commerce_bitpay', $order->order_id);
+  $transaction->instance_id = $payment_method['instance_id'];
+  //$transaction->transaction_id = $order->order_id;
+  $transaction->remote_id = 'Default';
+  $transaction->amount = $charge['amount'];
+  $transaction->currency_code = $charge['currency_code'];
+  $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+  $transaction->message = 'Message: @name';
+  $transaction->message_variables = array('@name' => $name);
+
+  commerce_payment_transaction_save($transaction);
+}
+
+function commerce_bitpay_redirect_form($form, &$form_state, $order, $payment_method) {
+
+    //get order to wrapper
+    $wrapper = entity_metadata_wrapper('commerce_order', $order);
+    
+    //get order price
+    $amount = $wrapper->commerce_order_total->amount->value();
+    $amount = $amount / 100;
+
+    global $base_url;
+
+    $options = array();
+
+    $options['redirectURL'] = variable_get('commerce_bitpay_redirectURL', '');
+    
+    if ($options['redirectURL'] == '')
+        $options['redirectURL'] = $base_url.'/checkout/'.$order->order_id.'/complete';
+
+    $options['notificationEmail'] = variable_get('commerce_bitpay_notificationEmail', '');
+
+    $options['currency'] = variable_get('commerce_bitpay_currency', '');
+
+    $options['notificationURL'] = $base_url.'/bitpay/ipn';
+
+    //get transaction by order id
+    $value = db_query("SELECT transaction_id FROM commerce_payment_transaction where order_id=".$order->order_id)->fetchField();
+    $transaction = commerce_payment_transaction_load($value);
+
+    //Create Bitpay invoice
+    require_once('bitpay-api.php');
+    $result = bpCreateInvoice($order->order_id, $amount, $transaction->transaction_id, $options);
+
+    //marks order to system
+    $order->data['commerce_bitpay'] = $result['url'];
+    commerce_order_save($order);
+    commerce_payment_redirect_pane_next_page($order, $log = '');
+
+    //sets some Bitpay information to transaction
+    $transaction->remote_id = ''.$result['id'];
+    $transaction->message = ''.$result['url'];
+    commerce_payment_transaction_save($transaction);  
+    
+    //redirect to Bitpay invoice
+    drupal_goto($result['url']);
+}
+
+//process instant payment notification which Bitpay sends
+function bpVerifyNotification() {
+	
+	$post = file_get_contents("php://input");
+	if (!$post)
+		return 'No post data';
+            echo 'no post';
+		
+	$json = json_decode($post, true);
+	
+	if (is_string($json))
+		return $json; // error
+                echo 'no post';
+	if (!array_key_exists('posData', $json)) 
+		return 'no posData';
+                echo 'no post';
+
+	$posData = json_decode($json['posData'], true);
+	if($posData['hash'] != crypt($posData['posData'], variable_get('commerce_bitpay_apikey', '')))
+		return 'authentication failed (bad hash)';
+		//return PHP_EOL."Hash: ".$posData['hash']." | "."posData: ". $posData['posData']." | "."Kryptatty: ".crypt($posData['posData'], $options['secret']).PHP_EOL;
+	$json['posData'] = $posData['posData'];
+		
+	//return $json;
+        
+        $transaction = commerce_payment_transaction_load($posData['posData']);
+        
+        switch ($posData['status']) {
+            case 'new':
+            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+            //$transaction->message = t("New payment, waiting confirmation");
+            break;
+
+            case 'paid':
+            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+            //$transaction->message = t('Paid, waiting confirmation');
+            break;
+
+            case 'confirmed':
+            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+            //$transaction->message = t('Payment confirmed');
+            break;
+
+            case 'complete':
+            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+            //$transaction->message = t('The payment has completed.');
+            break;
+
+//            case 'expired':
+//            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+//            $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
+//            break;
+        
+//            case 'invalid':
+//            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+//            $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
+//            break;
+        }
+        
+	commerce_payment_transaction_save($transaction);
+        
+        $fp = fopen(trim('./sites/all/modules/commerce_bitpay/test.txt'), 'w+');
+	fwrite($fp, $post.'\n posdata: '.$posData['posData'].'\n status: '.$posData['status']);
+	fclose($fp);
+}
+
+

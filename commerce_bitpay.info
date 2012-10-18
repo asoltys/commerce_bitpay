@@ -1,0 +1,6 @@
+name = Commerce Bitpay
+description = Adds Bitpay checkout option for drupal commerce.
+package = Commerce
+dependencies[] = commerce
+dependencies[] = commerce_payment
+core = 7.x
