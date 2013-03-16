@@ -3,6 +3,7 @@
 /**
  * @file
  * Provides a Bitpay payment method for Drupal Commerce
+ * Author: IhqTzup / Viljami Räisä, www.prasos.fi
  */
 
 
@@ -93,17 +94,16 @@ shopper back to your website after a successful purchase.<br><b> Leave blank to 
 function commerce_bitpay_menu() {
   $items = array();
 
-  
-  $items['admin/commerce/config/bitpay'] = array(
+  // Define an always accessible path to receive IPNs.
+  $items['admin/settings/commerce_bitpay'] = array(
     'title' => 'Bitpay',
-    'description' => 'Configure Bitpay module',  
+    'description' => 'Description of Bitpay module',  
     'page callback' => 'drupal_get_form',
     'page arguments' => array('commerce_bitpay_admin_settings'),
     'access arguments' => array('access administration pages'),
     'type' => MENU_NORMAL_ITEM,
   );
   
-  // Define an always accessible path to receive IPNs.
   $items['bitpay/ipn'] = array(
     'title' => 'Bitpay ipn',
     'page callback' => 'bpVerifyNotification',
@@ -241,70 +241,59 @@ function commerce_bitpay_redirect_form($form, &$form_state, $order, $payment_met
     drupal_goto($result['url']);
 }
 
-//process instant payment notification which Bitpay sends
 function bpVerifyNotification() {
+	$secret = variable_get('commerce_bitpay_secret', '');
 	
 	$post = file_get_contents("php://input");
 	if (!$post)
-		return 'No post data';
-            echo 'no post';
+		return 'No post data';          
 		
 	$json = json_decode($post, true);
 	
 	if (is_string($json))
-		return $json; // error
-                echo 'no post';
+		return $json;             
+                
 	if (!array_key_exists('posData', $json)) 
 		return 'no posData';
-                echo 'no post';
-
+                             
 	$posData = json_decode($json['posData'], true);
-	if($posData['hash'] != crypt($posData['posData'], variable_get('commerce_bitpay_apikey', '')))
+	if($posData['hash'] != crypt($posData['posData'], $secret))
 		return 'authentication failed (bad hash)';
-		//return PHP_EOL."Hash: ".$posData['hash']." | "."posData: ". $posData['posData']." | "."Kryptatty: ".crypt($posData['posData'], $options['secret']).PHP_EOL;
-	$json['posData'] = $posData['posData'];
-		
-	//return $json;
         
-        $transaction = commerce_payment_transaction_load($posData['posData']);
+  $transaction = commerce_payment_transaction_load($posData['posData']);
         
-        switch ($posData['status']) {
-            case 'new':
-            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
-            //$transaction->message = t("New payment, waiting confirmation");
-            break;
+  switch ($json['status']) {
+    case 'new':
+    $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+    $transaction->message = t("New payment, waiting confirmation");
+    break;
 
-            case 'paid':
-            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
-            //$transaction->message = t('Paid, waiting confirmation');
-            break;
+    case 'paid':
+    $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+    $transaction->message = t('Paid, waiting confirmation');
+    break;
 
-            case 'confirmed':
-            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
-            //$transaction->message = t('Payment confirmed');
-            break;
+    case 'confirmed':
+    $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+    $transaction->message = t('Payment confirmed');
+    break;
 
-            case 'complete':
-            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
-            //$transaction->message = t('The payment has completed.');
-            break;
+    case 'complete':
+    $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+    $transaction->message = t('The payment has completed.');
+    break;
 
-//            case 'expired':
-//            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
-//            $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
-//            break;
-        
-//            case 'invalid':
-//            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
-//            $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
-//            break;
-        }
+//  case 'expired':
+//  $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+//  $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
+//  break;
+    
+//  case 'invalid':
+//  $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+//  $transaction->message = t('Refund for transaction @txn_id', array('@txn_id' => $ipn['parent_txn_id']));
+//  break;
+  }
         
 	commerce_payment_transaction_save($transaction);
         
-        $fp = fopen(trim('./sites/all/modules/commerce_bitpay/test.txt'), 'w+');
-	fwrite($fp, $post.'\n posdata: '.$posData['posData'].'\n status: '.$posData['status']);
-	fclose($fp);
 }
-
-
