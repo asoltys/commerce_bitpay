@@ -220,7 +220,12 @@ function commerce_bitpay_redirect_form($form, &$form_state, $order, $payment_met
     $options['notificationURL'] = $base_url.'/bitpay/ipn';
 
     //get transaction by order id
-    $value = db_query("SELECT transaction_id FROM commerce_payment_transaction where order_id=".$order->order_id)->fetchField();
+    $value = db_select('commerce_payment_transaction')
+      ->fields('commerce_payment_transaction', array("transaction_id"))
+      ->condition('commerce_payment_transaction.order_id', $order->order_id)
+      ->execute()
+      ->fetchField();
+
     $transaction = commerce_payment_transaction_load($value);
 
     //Create Bitpay invoice
